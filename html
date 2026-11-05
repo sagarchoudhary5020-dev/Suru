@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>मल्टीप्लेयर कार रेस - 4 प्लेयर</title>
+    <!-- Tailwind CSS for UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js for 3D Graphics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Firebase SDK (v9 Modular via CDN bundles or simple integration) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+        import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+        
+        // --- FIREBASE CONFIG (अपनी Firebase प्रोजेक्ट डिटेल्स यहाँ डालें) ---
+        const firebaseConfig = {
+            apiKey: "YOUR_FIREBASE_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // ग्लोबल वेरिएबल्स
+        window.db = db;
+        window.isMultiplayerReady = true;
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #0f172a; font-family: sans-serif; touch-action: none; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+        .control-btn {
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+    </style>
+</head>
+<body class="text-white">
+
+    <!-- LOBBY SCREEN -->
+    <div id="lobby-screen" class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-900 bg-opacity-95 p-6">
+        <div class="max-w-md w-full bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 text-center">
+            <h1 class="text-3xl font-black mb-2 text-yellow-400 tracking-wider">🏎️ 3D कार रेस मल्टीप्लेयर</h1>
+            <p class="text-slate-400 text-sm mb-6">अपने दोस्तों के साथ एक ही ट्रैक पर रेस करें!</p>
+            
+            <div class="mb-4">
+                <input type="text" id="player-name" placeholder="अपना नाम लिखें..." class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-yellow-400 text-white font-bold mb-3">
+            </div>
+
+            <div class="space-y-3">
+                <button onclick="createRoom()" class="w-full py-3.5 bg-gradient-to-r from-yellow-500 to-amber-600 text-slate-950 font-black rounded-xl shadow-lg hover:from-yellow-400 hover:to-amber-500 transition-all">नया रूम बनाएं (Create Room)</button>
+                <div class="flex gap-2">
+                    <input type="text" id="room-code-input" placeholder="रूम कोड (4 अंक)" maxlength="4" class="w-1/2 px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl uppercase text-center font-bold tracking-widest text-yellow-400">
+                    <button onclick="joinRoom()" class="w-1/2 py-3.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow-lg transition-all">रूम ज्वाइन करें</button>
+                </div>
+            </div>
+            <div id="lobby-status" class="mt-4 text-sm text-amber-300 font-medium"></div>
+        </div>
+    </div>
+
+    <!-- WAITING ROOM SCREEN -->
+    <div id="waiting-screen" class="absolute inset-0 z-40 hidden flex flex-col items-center justify-center bg-slate-900 bg-opacity-95 p-6">
+        <div class="max-w-md w-full bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 text-center">
+            <h2 class="text-xl font-bold mb-2">रूम कोड: <span id="display-room-code" class="text-yellow-400 tracking-widest">----</span></h2>
+            <p class="text-slate-400 text-sm mb-6">खिलाड़ियों के जुड़ने का इंतज़ार किया जा रहा है (अधिकतम 4)...</p>
+            
+            <div id="players-list" class="space-y-2 mb-6 text-left bg-slate-900 p-4 rounded-xl border border-slate-700">
+                <!-- Players inserted dynamically -->
+            </div>
+
+            <button id="start-game-btn" onclick="startGame()" class="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl shadow-lg hidden transition-all">रेसिंग शुरू करें!</button>
+        </div>
+    </div>
+
+    <!-- GAME HUD & MOBILE CONTROLS -->
+    <div id="game-ui" class="absolute inset-0 z-20 hidden pointer-events-none flex flex-col justify-between p-4">
+        <!-- Top Stats -->
+        <div class="flex justify-between items-start pointer-events-auto">
+            <div class="bg-slate-900/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-700">
+                <div class="text-xs text-slate-400">स्पीड</div>
+                <div id="hud-speed" class="text-2xl font-black text-yellow-400">0 KM/H</div>
+            </div>
+            <div class="bg-slate-900/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-700 text-right">
+                <div class="text-xs text-slate-400">लैप (Lap)</div>
+                <div id="hud-lap" class="text-xl font-bold text-emerald-400">1 / 3</div>
+            </div>
+        </div>
+
+        <!-- Mobile Touch Controller Overlay -->
+        <div class="flex justify-between items-end pb-6 pointer-events-auto">
+            <div class="flex gap-3">
+                <button id="btn-left" class="control-btn w-20 h-20 bg-slate-800/80 border border-slate-600 rounded-2xl flex items-center justify-center text-3xl active:bg-yellow-500 active:text-slate-950 transition-colors shadow-lg">⬅️</button>
+                <button id="btn-right" class="control-btn w-20 h-20 bg-slate-800/80 border border-slate-600 rounded-2xl flex items-center justify-center text-3xl active:bg-yellow-500 active:text-slate-950 transition-colors shadow-lg">➡️</button>
+            </div>
+            <div class="flex gap-3">
+                <button id="btn-brake" class="control-btn w-20 h-20 bg-red-900/80 border border-red-700 rounded-2xl flex items-center justify-center text-2xl font-bold active:bg-red-600 transition-colors shadow-lg">🛑</button>
+                <button id="btn-accelerate" class="control-btn w-24 h-24 bg-emerald-600/90 border border-emerald-500 rounded-2xl flex items-center justify-center text-3xl font-black active:bg-emerald-400 active:text-slate-950 transition-colors shadow-lg">🚀</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3D Canvas Container -->
+    <div id="canvas-container"></div>
+
+    <!-- Game Engine & Multiplayer Logic Script -->
+    <script type="module">
+        import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+
+        let scene, camera, renderer;
+        let car, otherCars = {};
+        let trackMesh;
+        let roomId = null, playerId = null, playerName = "";
+        let isHost = false;
+        let gameStarted = false;
+
+        // कार मूवमेंट स्टेट
+        const controls = { forward: false, backward: false, left: false, right: false };
+        let carSpeed = 0, maxSpeed = 1.2, acceleration = 0.02, deceleration = 0.015, turnSpeed = 0.04;
+        let carPosition = { x: 0, y: 0.5, z: 0, rot: 0 };
+        let lapCount = 1;
+
+        // मोबाइल बटन इवेंट्स बाइंड करना
+        function setupControls() {
+            const bindBtn = (id, key) => {
+                const el = document.getElementById(id);
+                if(!el) return;
+                el.addEventListener('touchstart', (e) => { e.preventDefault(); controls[key] = true; });
+                el.addEventListener('touchend', (e) => { e.preventDefault(); controls[key] = false; });
+                el.addEventListener('mousedown', () => controls[key] = true);
+                el.addEventListener('mouseup', () => controls[key] = false);
+            };
+            bindBtn('btn-accelerate', 'forward');
+            bindBtn('btn-brake', 'backward');
+            bindBtn('btn-left', 'left');
+            bindBtn('btn-right', 'right');
+
+            // कीबोर्ड सपोर्ट (पीसी के लिए)
+            window.addEventListener('keydown', (e) => {
+                if(e.key === 'ArrowUp' || e.key === 'w') controls.forward = true;
+                if(e.key === 'ArrowDown' || e.key === 's') controls.backward = true;
+                if(e.key === 'ArrowLeft' || e.key === 'a') controls.left = true;
+                if(e.key === 'ArrowRight' || e.key === 'd') controls.right = true;
+            });
+            window.addEventListener('keyup', (e) => {
+                if(e.key === 'ArrowUp' || e.key === 'w') controls.forward = false;
+                if(e.key === 'ArrowDown' || e.key === 's') controls.backward = false;
+                if(e.key === 'ArrowLeft' || e.key === 'a') controls.left = false;
+                if(e.key === 'ArrowRight' || e.key === 'd') controls.right = false;
+            });
+        }
+
+        // 3D सीन इनिशियलाइज करना
+        function initThreeJS() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+            scene.fog = new THREE.FogExp2(0x0f172a, 0.015);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // लाइट्स
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(20, 40, 20);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // रेस ट्रैक बनाना (Oval Loop)
+            createTrack();
+
+            // खिलाड़ी की कार बनाना
+            car = createCarModel(0xef4444); // लाल रंग की मुख्य कार
+            scene.add(car);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        function createTrack() {
+            // ग्राउंड
+            const groundGeo = new THREE.PlaneGeometry(600, 600);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // ट्रैक रोड (Oval Path)
+            const trackGeo = new THREE.RingGeometry(40, 90, 32);
+            const trackMat = new THREE.MeshStandardMaterial({ color: 0x334155, side: THREE.DoubleSide });
+            trackMesh = new THREE.Mesh(trackGeo, trackMat);
+            trackMesh.rotation.x = -Math.PI / 2;
+            trackMesh.position.y = 0.05;
+            trackMesh.receiveShadow = true;
+            scene.add(trackMesh);
+        }
+
+        function createCarModel(colorHex) {
+            const carGroup = new THREE.Group();
+
+            // कार बॉडी
+            const bodyGeo = new THREE.BoxGeometry(2, 0.8, 4);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.3 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 0.6;
+            body.castShadow = true;
+            carGroup.add(body);
+
+            // रूफ (छत)
+            const roofGeo = new THREE.BoxGeometry(1.6, 0.6, 2);
+            const roofMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.1 });
+            const roof = new THREE.Mesh(roofGeo, roofMat);
+            roof.position.set(0, 1.2, -0.2);
+            roof.castShadow = true;
+            carGroup.add(roof);
+
+            // व्हील्स
+            const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16);
+            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x000000 });
+            
+            const positions = [
+                [-1.1, 0.4, 1.4], [1.1, 0.4, 1.4],
+                [-1.1, 0.4, -1.4], [1.1, 0.4, -1.4]
+            ];
+            positions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+                wheel.rotation.z = Math.PI / 2;
+                wheel.position.set(...pos);
+                carGroup.add(wheel);
+            });
+
+            return carGroup;
+        }
+
+        // --- मल्टीप्लेयर रूम फंक्शन ---
+        window.createRoom = async function() {
+            playerName = document.getElementById('player-name').value.trim() || "खिलाड़ी";
+            roomId = Math.floor(1000 + Math.random() * 9000).toString();
+            playerId = 'p_' + Math.random().toString(36.substring(2, 7));
+            isHost = true;
+
+            const roomRef = doc(window.db, "artifacts", "car_game_rooms", "rooms", roomId);
+            await setDoc(roomRef, {
+                host: playerId,
+                status: "waiting",
+                players: {
+                    [playerId]: { name: playerName, x: 0, z: -65, rot: 0, color: 0xef4444 }
+                }
+            });
+
+            document.getElementById('lobby-screen').classList.add('hidden');
+            document.getElementById('waiting-screen').classList.remove('hidden');
+            document.getElementById('display-room-code').innerText = roomId;
+            document.getElementById('start-game-btn').classList.remove('hidden');
+
+            listenToRoom();
+            updatePlayersList({ [playerId]: { name: playerName } });
+        };
+
+        window.joinRoom = async function() {
+            playerName = document.getElementById('player-name').value.trim() || "खिलाड़ी";
+            roomId = document.getElementById('room-code-input').value.trim();
+
+            if(!roomId || roomId.length !== 4) {
+                alert("कृपया सही 4 अंकों का रूम कोड डालें!");
+                return;
+            }
+
+            playerId = 'p_' + Math.random().toString(36).substring(2, 7);
+            const roomRef = doc(window.db, "artifacts", "car_game_rooms", "rooms", roomId);
+            const snap = await getDoc(roomRef);
+
+            if(!snap.exists()) {
+                alert("यह रूम नहीं मिला!");
+                return;
+            }
+
+            const data = snap.data();
+            const playerColors = [0xef4444, 0x3b82f6, 0x10b981, 0xf59e0b];
+            const playerCount = Object.keys(data.players).length;
+            
+            if(playerCount >= 4) {
+                alert("रूम पहले से भरा हुआ है (अधिकतम 4 खिलाड़ी)!");
+                return;
+            }
+
+            data.players[playerId] = { 
+                name: playerName, 
+                x: (playerCount * 3), 
+                z: -65, 
+                rot: 0, 
+                color: playerColors[playerCount % playerColors.length] 
+            };
+
+            await updateDoc(roomRef, { players: data.players });
+
+            document.getElementById('lobby-screen').classList.add('hidden');
+            document.getElementById('waiting-screen').classList.remove('hidden');
+            document.getElementById('display-room-code').innerText = roomId;
+
+            listenToRoom();
+        };
+
+        function listenToRoom() {
+            const roomRef = doc(window.db, "artifacts", "car_game_rooms", "rooms", roomId);
+            onSnapshot(roomRef, (docSnap) => {
+                if(!docSnap.exists()) return;
+                const data = docSnap.data();
+
+                if(data.status === "playing" && !gameStarted) {
+                    startGameSession();
+                }
+
+                updatePlayersList(data.players);
+                syncOtherPlayers(data.players);
+            });
+        }
+
+        function updatePlayersList(players) {
+            const listEl = document.getElementById('players-list');
+            listEl.innerHTML = Object.values(players).map(p => `<div class="py-1 px-3 bg-slate-800 rounded font-bold text-sm text-yellow-300">👤 ${p.name}</div>`).join('');
+        }
+
+        window.startGame = async function() {
+            const roomRef = doc(window.db, "artifacts", "car_game_rooms", "rooms", roomId);
+            await updateDoc(roomRef, { status: "playing" });
+        };
+
+        function startGameSession() {
+            gameStarted = true;
+            document.getElementById('waiting-screen').classList.add('hidden');
+            document.getElementById('game-ui').classList.remove('hidden');
+
+            initThreeJS();
+            setupControls();
+            animate();
+        }
+
+        function syncOtherPlayers(players) {
+            for(let id in players) {
+                if(id === playerId) continue;
+                let pData = players[id];
+
+                if(!otherCars[id]) {
+                    otherCars[id] = createCarModel(pData.color || 0x3b82f6);
+                    scene.add(otherCars[id]);
+                }
+
+                otherCars[id].position.set(pData.x, 0.5, pData.z);
+                otherCars[id].rotation.y = pData.rot;
+            }
+        }
+
+        // --- गेम लूप ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if(!gameStarted) return;
+
+            // कार फिजिक्स
+            if(controls.forward) {
+                carSpeed = Math.min(carSpeed + acceleration, maxSpeed);
+            } else if(controls.backward) {
+                carSpeed = Math.max(carSpeed - acceleration, -maxSpeed * 0.4);
+            } else {
+                carSpeed *= (1 - deceleration);
+            }
+
+            if(Math.abs(carSpeed) > 0.01) {
+                if(controls.left) carPosition.rot += turnSpeed * (carSpeed > 0 ? 1 : -1);
+                if(controls.right) carPosition.rot -= turnSpeed * (carSpeed > 0 ? 1 : -1);
+            }
+
+            carPosition.x += Math.sin(carPosition.rot) * carSpeed;
+            carPosition.z += Math.cos(carPosition.rot) * carSpeed;
+
+            car.position.set(carPosition.x, carPosition.y, carPosition.z);
+            car.rotation.y = carPosition.rot;
+
+            // HUD अपडेट करें
+            document.getElementById('hud-speed').innerText = Math.round(Math.abs(carSpeed) * 120) + " KM/H";
+
+            // कैमरा फॉलो (Third-person view)
+            const camDist = 8, camHeight = 3;
+            camera.position.x = carPosition.x - Math.sin(carPosition.rot) * camDist;
+            camera.position.z = carPosition.z - Math.cos(carPosition.rot) * camDist;
+            camera.position.y = carPosition.y + camHeight;
+            camera.lookAt(carPosition.x, carPosition.y + 0.5, carPosition.z);
+
+            // हर फ्रेम में Firebase पर अपनी पोजीशन सिंक करें (Throttled via requestAnimationFrame frequency)
+            if(Math.random() < 0.3 && roomId && playerId) {
+                updatePositionInFirebase();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        async function updatePositionInFirebase() {
+            const roomRef = doc(window.db, "artifacts", "car_game_rooms", "rooms", roomId);
+            const snap = await getDoc(roomRef);
+            if(snap.exists()) {
+                const data = snap.data();
+                if(data.players && data.players[playerId]) {
+                    data.players[playerId].x = carPosition.x;
+                    data.players[playerId].z = carPosition.z;
+                    data.players[playerId].rot = carPosition.rot;
+                    await updateDoc(roomRef, { players: data.players });
+                }
+            }
+        }
+    </script>
+</body>
+</html>
